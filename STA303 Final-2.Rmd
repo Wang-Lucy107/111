@@ -1,0 +1,138 @@
+---
+title: "STA303 Final"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r results="hide"}
+library(tidyverse)
+data = read.csv("diabetes_update.csv",header = TRUE)[, -1]
+
+colSums(is.na(data))
+
+diabetes <- data %>% select(-encounter_id, -weight, -admission_source_id, -payer_code, -medical_specialty, -encounter_num, -examide, -citoglipton)
+
+diabetes <- na.omit(diabetes)
+
+colSums(is.na(diabetes))
+
+
+##Remove repeated patient encounter#
+diabetes <- diabetes[!duplicated(diabetes$patient_nbr),]
+
+diabetes$readmitted = ifelse(diabetes$readmitted == "<30", "Readmission", "No Readmission")
+diabetes %>% group_by(readmitted) %>%
+  summarise(n())
+
+
+
+##Race##
+diabetes %>% group_by(race) %>%
+  summarise(readmitted_prop = sum(readmitted == "Readmission")/n())
+
+
+
+##Gender##
+diabetes %>% group_by(gender) %>%
+  summarise(readmitted_prop = sum(readmitted == "Readmission")/n())
+
+
+
+##Age##
+diabetes %>% group_by(age) %>%
+  summarise(readmitted_prop = sum(readmitted == "Readmission")/n())
+
+
+
+##A1cResult##
+diabetes %>% group_by(A1Cresult) %>%
+  summarise(readmitted_prop = sum(readmitted == "Readmission")/n())
+
+
+
+##Length of Stay##
+diabetes %>% group_by(Length.of.Stay) %>%
+  summarise(readmitted_prop = sum(readmitted == "Readmission")/n())
+
+
+
+
+
+
+
+```
+
+```{r results="hide"}
+set.seed(1004709540)
+ID = sample(unique(diabetes$patient_nbr),size = 20000)
+test = diabetes[diabetes$patient_nbr %in% ID,]
+train = diabetes[!diabetes$patient_nbr %in% ID,]
+
+##The fitted logistic regression##
+logit.mod <- glm(as.factor(readmitted) ~ race + admission_type_id + age + A1Cresult + Length.of.Stay + num_lab_procedures+num_procedures + number_outpatient+number_emergency+number_inpatient, data=train, family=binomial)
+summary(logit.mod)
+```
+
+```{r}
+set.seed(1004709540)
+logit.aic <- step(logit.mod, trace = 0)
+summary(logit.aic)
+```
+
+```{r}
+set.seed(1004709540)
+logit.bic = step(logit.mod, trace = 0, k = log(length(train)))
+summary(logit.bic)
+```
+
+
+```{r}
+library(rms)
+set.seed(1004709540)
+train$readmitted = factor(train$readmitted)
+
+lrm.final = lrm(readmitted~  age + Length.of.Stay + 
+    num_lab_procedures + num_procedures + number_emergency + 
+    number_inpatient, 
+                data = train,
+                x =TRUE, y = TRUE, model= T)
+cross.calib = calibrate(lrm.final, method="crossvalidation", B=10)
+plot(cross.calib, las=1, xlab = "Predicted Probability")
+```
+
+```{r}
+library(pROC)
+set.seed(1004709540)
+p1 <- predict(logit.aic, train, type = "response")
+roc_logit <- roc(train$readmitted=="Readmission" ~ p1)
+## The True Positive Rate ##
+TPR <- roc_logit$sensitivities
+## The False Positive Rate ##
+FPR <- 1 - roc_logit$specificities
+plot(FPR, TPR, xlim = c(0,1), ylim = c(0,1), type = 'l', lty = 1, lwd = 2,col = 'red')
+abline(a = 0, b = 1, lty = 2, col = 'blue')
+text(0.7,0.4,label = paste("AUC = ", round(auc(roc_logit),2)))
+
+auc(roc_logit)
+
+```
+
+```{r}
+### Validating on the train data ##
+test$pred.prob = predict(logit.aic, newdata = test, type = "response")
+deciles = quantile(test$pred.prob, probs = seq(0,1, by =0.1), na.rm = T)
+test$decile = findInterval(test$pred.prob, deciles, rightmost.closed = T)
+
+
+pred.prob = tapply(test$pred.prob, test$decile, mean)
+obs.prob = tapply(test$readmitted == "Readmission", test$decile, mean)
+## The plot ##
+plot(pred.prob, obs.prob, type = "l", ylab = "Observed", 
+     xlab = "Predicted", xlim = c(0,0.2), ylim = c(0,0.2))
+abline(a=0, b=1)
+```
+
+
